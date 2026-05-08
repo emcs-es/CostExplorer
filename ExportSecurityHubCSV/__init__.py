@@ -6,10 +6,27 @@ from azure.storage.blob import BlobServiceClient
 from datetime import datetime, timedelta
 
 
+def get_account_map():
+    """
+    Obtiene mapa id_cuenta -> nombre cuenta desde AWS Organizations
+    """
+    org = boto3.client(
+        'organizations',
+        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"]
+    )
+
+    accounts = {}
+    paginator = org.get_paginator('list_accounts')
+
+    for page in paginator.paginate():
+        for acc in page['Accounts']:
+            accounts[acc['Id']] = acc['Name']
+
+    return accounts
+
+
 def get_cost_data(client, start_date, end_date, group_by):
-    """
-    Ejecuta una llamada a Cost Explorer con paginación
-    """
     all_results = []
     next_token = None
 
@@ -38,10 +55,7 @@ def get_cost_data(client, start_date, end_date, group_by):
     return all_results
 
 
-def flatten_results(results, dimension_names, tipo_dimension):
-    """
-    Convierte la respuesta AWS a filas CSV
-    """
+def flatten_results(results, dimension_names, vista_coste, account_map):
     rows = []
 
     for day_result in results:
@@ -53,18 +67,30 @@ def flatten_results(results, dimension_names, tipo_dimension):
 
             row = {
                 'fecha': fecha,
-                'tipo_dimension': tipo_dimension,
+                'vista_coste': vista_coste,
                 'SERVICE': '',
-                'LINKED_ACCOUNT': '',
+                'id_cuenta': '',
+                'cuenta': '',
                 'REGION': '',
-                'USAGE_TYPE': '',
-                'INSTANCE_TYPE': '',
-                'TAG': '',
+                'concepto_facturado': '',
+                'servidor_utilizado': '',
+                'cliente_asociado': '',
                 'coste': cost
             }
 
             for i, dim_name in enumerate(dimension_names):
-                row[dim_name] = keys[i] if i < len(keys) else ''
+                if dim_name == 'LINKED_ACCOUNT':
+                    acc_id = keys[i] if i < len(keys) else ''
+                    row['id_cuenta'] = acc_id
+                    row['cuenta'] = account_map.get(acc_id, '')
+                elif dim_name == 'USAGE_TYPE':
+                    row['concepto_facturado'] = keys[i] if i < len(keys) else ''
+                elif dim_name == 'INSTANCE_TYPE':
+                    row['servidor_utilizado'] = keys[i] if i < len(keys) else ''
+                elif dim_name == 'TAG':
+                    row['cliente_asociado'] = keys[i] if i < len(keys) else ''
+                else:
+                    row[dim_name] = keys[i] if i < len(keys) else ''
 
             rows.append(row)
 
@@ -73,9 +99,6 @@ def flatten_results(results, dimension_names, tipo_dimension):
 
 def main(mytimer):
 
-    # ==============================
-    # Cliente AWS Cost Explorer
-    # ==============================
     client = boto3.client(
         'ce',
         region_name='us-east-1',
@@ -83,9 +106,8 @@ def main(mytimer):
         aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"]
     )
 
-    # ==============================
-    # Fechas (solo mes en curso e histórico 3 meses)
-    # ==============================
+    account_map = get_account_map()
+
     today = datetime.utcnow().date()
 
     month_start = today.replace(day=1)
@@ -105,21 +127,14 @@ def main(mytimer):
     )
 
     periods = [
-        (
-            "MES_CURSO",
-            month_start.strftime("%Y-%m-%d"),
-            today.strftime("%Y-%m-%d")
-        ),
-        (
-            "HISTORICO_3M",
-            hist_start.strftime("%Y-%m-%d"),
-            month_start.strftime("%Y-%m-%d")
-        )
+        ("MES_CURSO",
+         month_start.strftime("%Y-%m-%d"),
+         today.strftime("%Y-%m-%d")),
+        ("HISTORICO_3M",
+         hist_start.strftime("%Y-%m-%d"),
+         month_start.strftime("%Y-%m-%d"))
     ]
 
-    # ==============================
-    # Múltiples llamadas
-    # ==============================
     query_sets = [
         (
             [
@@ -127,7 +142,7 @@ def main(mytimer):
                 {'Type': 'DIMENSION', 'Key': 'LINKED_ACCOUNT'}
             ],
             ['SERVICE', 'LINKED_ACCOUNT'],
-            'SERVICE_ACCOUNT'
+            'vista_servicio_por_cuenta'
         ),
         (
             [
@@ -135,7 +150,7 @@ def main(mytimer):
                 {'Type': 'DIMENSION', 'Key': 'USAGE_TYPE'}
             ],
             ['REGION', 'USAGE_TYPE'],
-            'REGION_USAGE'
+            'vista_region_por_consumo'
         ),
         (
             [
@@ -143,13 +158,10 @@ def main(mytimer):
                 {'Type': 'TAG', 'Key': 'Customer'}
             ],
             ['INSTANCE_TYPE', 'TAG'],
-            'INSTANCE_TAG'
+            'vista_recurso_por_cliente'
         )
     ]
 
-    # ==============================
-    # Azure Blob
-    # ==============================
     connection_string = os.environ["AzureWebJobsStorage"]
 
     blob_service_client = BlobServiceClient.from_connection_string(
@@ -158,23 +170,17 @@ def main(mytimer):
 
     container_name = "copydatacost"
 
-    container_client = blob_service_client.get_container_client(
-        container_name
-    )
+    container_client = blob_service_client.get_container_client(container_name)
 
-    # Borrar CSVs antiguos
     for blob in container_client.list_blobs():
         if blob.name.endswith(".csv"):
             container_client.delete_blob(blob.name)
 
-    # ==============================
-    # Crear y subir 1 CSV por periodo
-    # ==============================
     for period_name, start_date, end_date in periods:
 
         all_rows = []
 
-        for group_by, dimension_names, tipo_dimension in query_sets:
+        for group_by, dimension_names, vista_coste in query_sets:
 
             results = get_cost_data(
                 client,
@@ -186,11 +192,9 @@ def main(mytimer):
             rows = flatten_results(
                 results,
                 dimension_names,
-                tipo_dimension
+                vista_coste,
+                account_map
             )
-
-            for row in rows:
-                row['periodo'] = period_name
 
             all_rows.extend(rows)
 
@@ -198,37 +202,36 @@ def main(mytimer):
         writer = csv.writer(output)
 
         writer.writerow([
-            'periodo',
             'fecha',
-            'tipo_dimension',
+            'vista_coste',
             'SERVICE',
-            'LINKED_ACCOUNT',
+            'id_cuenta',
+            'cuenta',
             'REGION',
-            'USAGE_TYPE',
-            'INSTANCE_TYPE',
-            'TAG',
+            'concepto_facturado',
+            'servidor_utilizado',
+            'cliente_asociado',
             'coste'
         ])
 
         for row in all_rows:
             writer.writerow([
-                row.get('periodo', ''),
                 row.get('fecha', ''),
-                row.get('tipo_dimension', ''),
+                row.get('vista_coste', ''),
                 row.get('SERVICE', ''),
-                row.get('LINKED_ACCOUNT', ''),
+                row.get('id_cuenta', ''),
+                row.get('cuenta', ''),
                 row.get('REGION', ''),
-                row.get('USAGE_TYPE', ''),
-                row.get('INSTANCE_TYPE', ''),
-                row.get('TAG', ''),
+                row.get('concepto_facturado', ''),
+                row.get('servidor_utilizado', ''),
+                row.get('cliente_asociado', ''),
                 row.get('coste', '')
             ])
 
         now_str = datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
 
-        blob_name = (
-            f"cost_{period_name.lower()}_{now_str}.csv"
-        )
+        # nombre de periodo
+        blob_name = f"cost_{period_name.lower()}_{now_str}.csv"
 
         blob_client = blob_service_client.get_blob_client(
             container=container_name,
