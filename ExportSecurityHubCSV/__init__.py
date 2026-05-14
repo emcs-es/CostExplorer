@@ -4,6 +4,7 @@ import os
 from io import StringIO
 from azure.storage.blob import BlobServiceClient
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 
 def get_account_map():
@@ -113,26 +114,18 @@ def main(mytimer):
     month_start = today.replace(day=1)
 
     hist_end = month_start - timedelta(days=1)
-    hist_start_month = today.month - 3
-    hist_start_year = today.year
 
-    if hist_start_month <= 0:
-        hist_start_month += 12
-        hist_start_year -= 1
+    # --- ÚLTIMO MES MÓVIL (HOY - 1 MES HASTA HOY) ---
+    
 
-    hist_start = hist_end.replace(
-        year=hist_start_year,
-        month=hist_start_month,
-        day=1
-    )
-
+    last_month_end = today
+    last_month_start = today - relativedelta(months=1)
+    
+    
     periods = [
-        ("MES_CURSO",
-         month_start.strftime("%Y-%m-%d"),
-         today.strftime("%Y-%m-%d")),
-        ("HISTORICO_3M",
-         hist_start.strftime("%Y-%m-%d"),
-         month_start.strftime("%Y-%m-%d"))
+        ("ULTIMO_MES",
+         last_month_start.strftime("%Y-%m-%d"),
+         last_month_end.strftime("%Y-%m-%d"))
     ]
 
     query_sets = [
