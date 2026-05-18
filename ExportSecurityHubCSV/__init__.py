@@ -4,7 +4,7 @@ import os
 from io import StringIO
 from azure.storage.blob import BlobServiceClient
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
+
 
 
 def get_account_map():
@@ -64,7 +64,7 @@ def flatten_results(results, dimension_names, vista_coste, account_map):
 
         for group in day_result.get('Groups', []):
             keys = group.get('Keys', [])
-            cost = group['Metrics']['UnblendedCost']['Amount']
+            cost = round(float(group['Metrics']['UnblendedCost']['Amount']), 2)
 
             row = {
                 'fecha': fecha,
@@ -111,22 +111,15 @@ def main(mytimer):
 
     today = datetime.utcnow().date()
 
-    month_start = today.replace(day=1)
-
-    hist_end = month_start - timedelta(days=1)
-
-    # --- ÚLTIMO MES MÓVIL (HOY - 1 MES HASTA HOY) ---
+    # Día anterior
+    yesterday = today - timedelta(days=1)    
     
+    period_name = "AYER"
 
-    last_month_end = today
-    last_month_start = today - relativedelta(months=1)
-    
-    
-    periods = [
-        ("ULTIMO_MES",
-         last_month_start.strftime("%Y-%m-%d"),
-         last_month_end.strftime("%Y-%m-%d"))
-    ]
+    start_date = yesterday.strftime("%Y-%m-%d")
+
+    end_date = today.strftime("%Y-%m-%d")
+
 
     query_sets = [
         (
@@ -169,7 +162,7 @@ def main(mytimer):
         if blob.name.endswith(".csv"):
             container_client.delete_blob(blob.name)
 
-    for period_name, start_date, end_date in periods:
+    
 
         all_rows = []
 
