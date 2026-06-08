@@ -128,7 +128,7 @@ def main(mytimer):
                 {'Type': 'DIMENSION', 'Key': 'LINKED_ACCOUNT'}
             ],
             ['SERVICE', 'LINKED_ACCOUNT'],
-            'vista_servicio_por_cuenta'
+            'recurso_por_cliente'
         ),
         (
             [
@@ -136,7 +136,7 @@ def main(mytimer):
                 {'Type': 'DIMENSION', 'Key': 'USAGE_TYPE'}
             ],
             ['REGION', 'USAGE_TYPE'],
-            'vista_region_por_consumo'
+            'consumo_por_region'
         ),
         (
             [
@@ -144,7 +144,7 @@ def main(mytimer):
                 {'Type': 'TAG', 'Key': 'Customer'}
             ],
             ['INSTANCE_TYPE', 'TAG'],
-            'vista_recurso_por_cliente'
+            'servicio_por_cliente'
         )
     ]
 
